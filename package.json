@@ -1,0 +1,21 @@
+{
+    "name": "voice-calculation-game",
+    "version": "1.0.0",
+    "description": "高齢者向け音声計算ゲーム",
+    "main": "voice_calc_game.js",
+    "scripts": {
+        "start": "node voice_calc_game.js",
+        "test": "node voice_calc_game.js --test"
+    },
+    "keywords": [
+        "voice",
+        "calculation",
+        "game",
+        "elderly"
+    ],
+    "author": "",
+    "license": "MIT",
+    "dependencies": {
+        "say": "^0.16.0"
+    }
+}
