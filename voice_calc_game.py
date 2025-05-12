@@ -6,6 +6,7 @@ import speech_recognition as sr
 import subprocess
 import time
 from conversation_manager import ConversationManager
+import unicodedata
 
 class VoiceCalculationGame:
     """音声による計算ゲーム"""
@@ -74,42 +75,71 @@ class VoiceCalculationGame:
     
     def run_game(self):
         """ゲームを実行"""
-        self.speak("脳トレゲームを始めます。計算問題を出しますので、答えを言ってください。")
-        self.speak("ゲームを終了するには、「終了」と言ってください。")
+        print("\n=== 計算ゲーム開始 ===")
+        print("問題が出題されます。答えを言ってください。")
+        print("===================\n")
         
-        score = 0
-        total_questions = 0
+        correct_count = 0
+        total_questions = 5
         
-        while True:
-            question, answer = self.generate_question()
-            self.speak(question)
+        for i in range(total_questions):
+            # 問題を生成
+            num1 = random.randint(1, 10)
+            num2 = random.randint(1, 10)
+            operator = random.choice(['+', '-', '*'])
             
-            response = self.listen()
-            if response is None:
+            # 問題を表示（音声出力なし）
+            if operator == '+':
+                answer = num1 + num2
+                print(f"\n問題 {i+1}/{total_questions}: {num1} + {num2} = ?")
+            elif operator == '-':
+                answer = num1 - num2
+                print(f"\n問題 {i+1}/{total_questions}: {num1} - {num2} = ?")
+            else:
+                answer = num1 * num2
+                print(f"\n問題 {i+1}/{total_questions}: {num1} × {num2} = ?")
+            
+            # 音声で問題を読み上げ
+            if operator == '+':
+                self.speak(f"{num1}たす{num2}は？")
+            elif operator == '-':
+                self.speak(f"{num1}ひく{num2}は？")
+            else:
+                self.speak(f"{num1}かける{num2}は？")
+            
+            # ユーザーの回答を待つ
+            user_answer = self.listen()
+            if user_answer is None:
                 continue
-                
-            if "終了" in response:
-                break
-                
+            
+            # 正解判定
             try:
-                user_answer = int(response)
-                total_questions += 1
-                
-                if user_answer == answer:
-                    self.speak("正解です！")
-                    score += 1
+                if int(normalize_answer(user_answer)) == int(answer):
+                    correct_count += 1
+                    print("正解です！")
+                    self.speak("正解です")
                 else:
-                    self.speak(f"残念、正解は{answer}でした。")
-                
-                # スコアを表示
-                self.speak(f"現在のスコアは{score}問正解、{total_questions}問中です。")
-                
-            except ValueError:
-                self.speak("数字で答えてください。")
+                    print(f"不正解です。正解は{answer}でした。")
+                    self.speak(f"不正解です。正解は{answer}でした。")
+            except Exception as e:
+                print(f"判定エラー: {e}")
+                print(f"不正解です。正解は{answer}でした。")
+                self.speak(f"不正解です。正解は{answer}でした。")
         
-        # 最終結果を表示
-        self.speak(f"ゲーム終了です。{total_questions}問中{score}問正解でした。")
-        self.speak("お疲れ様でした。")
+        # 結果を表示（音声出力なし）
+        print("\n=== ゲーム結果 ===")
+        print(f"正解数: {correct_count}/{total_questions}")
+        print("=================\n")
+        
+        # 結果を音声で通知
+        self.speak(f"ゲーム終了です。{total_questions}問中{correct_count}問正解でした。")
+
+def normalize_answer(ans):
+    # 空白除去・全角半角統一
+    ans = ans.replace(" ", "").replace("　", "")
+    ans = unicodedata.normalize('NFKC', ans)
+    # 数字以外の文字を除去（必要なら）
+    return ans
 
 if __name__ == "__main__":
     game = VoiceCalculationGame()

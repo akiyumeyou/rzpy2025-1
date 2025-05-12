@@ -2,91 +2,62 @@
 # -*- coding: utf-8 -*-
 
 import os
-import subprocess
-import speech_recognition as sr
-import webbrowser
-import time
 import sys
+import time
+from dotenv import load_dotenv
+from speech_input import listen
+from speech_output import speak
+from api_chat import start_voice_chat
 from voice_calc_game import VoiceCalculationGame
-import api_chat
-from conversation_manager import ConversationManager
+from file_operations import save_conversation_record
+import subprocess
 
-# 会話マネージャーのインスタンス
-conversation_manager = ConversationManager()
-
-def speak(text):
-    """テキストを音声で読み上げる"""
-    print(f"コンピュータ: {text}")
-    # 会話を記録
-    conversation_manager.add_to_conversation("system", text)
-    # 「は」を「わ」と発音させるための置換
-    speaking_text = text.replace("は", "わ").replace("初めましょう", "はじめましょう")
-    # macOSのsayコマンドを使用
-    subprocess.run(["say", "-v", "Kyoko", speaking_text])
-
-def listen():
-    """音声を認識して返す"""
-    recognizer = sr.Recognizer()
-    microphone = sr.Microphone()
-    
-    with microphone as source:
-        speak("どうぞ、")
-        print("聞いています...")
-        try:
-            recognizer.adjust_for_ambient_noise(source)
-            audio = recognizer.listen(source, timeout=10.0)
-            text = recognizer.recognize_google(audio, language='ja-JP')
-            print(f"認識された発話: {text}")
-            # 会話を記録
-            conversation_manager.add_to_conversation("user", text)
-            return text.lower()
-        except sr.WaitTimeoutError:
-            speak("声が聞こえませんでした。もう一度お願いします。")
-            return None
-        except sr.UnknownValueError:
-            speak("すみません、聞き取れませんでした。もう一度お願いします。")
-            return None
-        except sr.RequestError:
-            speak("音声認識サービスに接続できませんでした。ネットワーク接続を確認してください。")
-            return None
-
-def display_summary():
-    """セッションの要約を表示"""
-    summary = conversation_manager.get_summary()
-    print("\n=== セッションの要約 ===")
-    print(summary)
-    print("=====================\n")
+# .envファイルの読み込み
+load_dotenv()
 
 def main():
-    """メイン処理"""
-    speak("もしもし。今の私は、おしゃべり、脳トレゲーム、ポッツ接続ができます。選んでください")
-    
-    while True:
-        command = listen()
-        if command is None:
-            continue
-            
-        if "おしゃべり" in command:
-            speak("おしゃべりを始めます")
-            api_chat.start_voice_chat()
-            speak("メニューに戻りました。次は何をしますか？")
-            
-        elif "脳トレ" in command:
-            speak("脳トレゲームを始めます")
-            game = VoiceCalculationGame()
-            game.run_game()
-            speak("メニューに戻りました。次は何をしますか？")
-            
-        elif "ポッツ" in command or "接続" in command:
-            speak("ポッツに接続します")
-            webbrowser.open("https://ftc.potz.jp/dashboard")
-            time.sleep(3)
-            speak("ポッツに接続しました。メニューから選んでください")
-            
-        elif "終了" in command or "さようなら" in command:
-            speak("プログラムを終了します。")
-            display_summary()
-            sys.exit(0)
+    """メインプログラム"""
+    try:
+        # 初期化
+        print("システムを起動しています...")
+        speak("こんにちは。おしゃべり、脳トレゲーム、ポッツに接続のどれをしますか？")
+        
+        while True:
+            # モード選択
+            user_input = listen()
+            if user_input is None:
+                continue
+                
+            # モード判定
+            normalized_input = user_input.replace(" ", "").replace("　", "")
+            if "おしゃべり" in normalized_input:
+                speak("おしゃべりを開始します")
+                start_voice_chat()
+                break
+                
+            elif "脳トレ" in user_input or "ゲーム" in user_input:
+                speak("脳トレゲームを開始します")
+                game = VoiceCalculationGame()
+                game.run_game()
+                break
+                
+            elif "ポッツ" in user_input or "接続" in user_input:
+                speak("ポッツへの接続を開始します")
+                # TODO: ポッツ接続機能の実装
+                speak("申し訳ありません。この機能は現在開発中です")
+                break
+                
+            else:
+                speak("すみません、もう一度お選びください")
+                print("選択可能なモード：")
+                print("1. おしゃべり")
+                print("2. 脳トレゲーム")
+                print("3. ポッツに接続")
+                
+    except KeyboardInterrupt:
+        print("\nプログラムを終了します")
+    except Exception as e:
+        print(f"エラーが発生しました: {e}")
 
 if __name__ == "__main__":
-    main() 
+    main()
