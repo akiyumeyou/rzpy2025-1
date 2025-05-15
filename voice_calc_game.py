@@ -6,7 +6,10 @@ import speech_recognition as sr
 import subprocess
 import time
 from conversation_manager import ConversationManager
-import unicodedata
+from speech_output import speak
+from datetime import datetime
+from file_operations import save_calc_game_result
+
 
 class VoiceCalculationGame:
     """音声による計算ゲーム"""
@@ -26,120 +29,119 @@ class VoiceCalculationGame:
         print(f"コンピュータ: {text}")
         # 会話を記録
         self.conversation_manager.add_to_conversation("system", text)
-        # 「は」を「わ」と発音させるための置換
-        speaking_text = text.replace("は", "わ").replace("初めましょう", "はじめましょう")
-        # macOSのsayコマンドを使用
+        # 「は？」を「wa?」に置換（出題文用）
+        speaking_text = text.replace("は？", "わ？").replace("は", "わ").replace("初めましょう", "はじめましょう")
         subprocess.run(["say", "-v", "Kyoko", speaking_text])
     
     def listen(self):
-        """音声を認識して返す"""
+        """音声を認識して返す（短い発話を素早くキャッチ）"""
         with self.microphone as source:
             print("聞いています...")
             try:
-                audio = self.recognizer.listen(source, timeout=10.0)
+                audio = self.recognizer.listen(source, timeout=5.0, phrase_time_limit=2.0)
                 text = self.recognizer.recognize_google(audio, language='ja-JP')
                 print(f"認識された発話: {text}")
-                # 会話を記録
                 self.conversation_manager.add_to_conversation("user", text)
                 return text.lower()
             except sr.WaitTimeoutError:
-                self.speak("声が聞こえませんでした。もう一度お願いします。")
+                speak("声が聞こえませんでした。もう一度お願いします。")
                 return None
             except sr.UnknownValueError:
-                self.speak("すみません、聞き取れませんでした。もう一度お願いします。")
+                speak("すみません、聞き取れませんでした。もう一度お願いします。")
                 return None
             except sr.RequestError:
-                self.speak("音声認識サービスに接続できませんでした。ネットワーク接続を確認してください。")
+                speak("音声認識サービスに接続できませんでした。ネットワーク接続を確認してください。")
                 return None
     
-    def generate_question(self):
-        """計算問題を生成"""
-        a = random.randint(1, 9)
-        b = random.randint(1, 9)
-        operator = random.choice(["+", "-", "*"])
+    def generate_question(self, level=1):
+        """計算問題を生成（level=1:簡単, level=2:難しい）"""
+        if level == 1:
+            a = random.randint(1, 9)
+            b = random.randint(1, 9)
+            operator = random.choice(["+", "-", "*"])
+        else:
+            operator = random.choice(["+", "-", "*", "/"])
+            if operator == "+":
+                a = random.randint(10, 99)
+                b = random.randint(10, 99)
+            elif operator == "-":
+                a = random.randint(10, 99)
+                b = random.randint(10, a)  # a >= b
+            elif operator == "*":
+                a = random.randint(2, 12)
+                b = random.randint(2, 12)
+            else:  # "/"
+                b = random.randint(2, 12)
+                answer = random.randint(2, 12)
+                a = b * answer  # 割り切れるように
         
         if operator == "+":
             answer = a + b
-            question = f"{a}たす{b}は？"
+            question = f"{a}たす{b}わ？"
         elif operator == "-":
-            # 負の数にならないように
-            if a < b:
-                a, b = b, a
             answer = a - b
-            question = f"{a}ひく{b}は？"
-        else:  # "*"
+            question = f"{a}ひく{b}わ？"
+        elif operator == "*":
             answer = a * b
-            question = f"{a}かける{b}は？"
-        
+            question = f"{a}かける{b}わ？"
+        else:  # "/"
+            question = f"{a}わる{b}わ？"
         return question, answer
     
     def run_game(self):
-        """ゲームを実行"""
-        print("\n=== 計算ゲーム開始 ===")
-        print("問題が出題されます。答えを言ってください。")
-        print("===================\n")
+        """ゲームを実行（10問固定、途中経過アナウンス、難易度調整）"""
+        speak("計算問題を出しますので、答えを言ってください。")
+        speak("全部で10問です。途中でゲームを終了するには、「終了」と言ってください。")
         
-        correct_count = 0
-        total_questions = 5
+        score = 0
+        total_questions = 10
+        detail_results = []
+        start_time = time.time()
         
-        for i in range(total_questions):
-            # 問題を生成
-            num1 = random.randint(1, 10)
-            num2 = random.randint(1, 10)
-            operator = random.choice(['+', '-', '*'])
+        for i in range(1, total_questions + 1):
+            # 5問目以降は難易度アップ
+            level = 1 if i <= 5 else 2
+            question, answer = self.generate_question(level=level)
+            speak(question)
             
-            # 問題を表示（音声出力なし）
-            if operator == '+':
-                answer = num1 + num2
-                print(f"\n問題 {i+1}/{total_questions}: {num1} + {num2} = ?")
-            elif operator == '-':
-                answer = num1 - num2
-                print(f"\n問題 {i+1}/{total_questions}: {num1} - {num2} = ?")
-            else:
-                answer = num1 * num2
-                print(f"\n問題 {i+1}/{total_questions}: {num1} × {num2} = ?")
+            response = self.listen()
+            if response is None:
+                # もう一度同じ問題を出します。
+                speak("もう一度同じ問題を出します。")
+                speak(question)
+                response = self.listen()
+                if response is None:
+                    detail_results.append(f"{i}問目: スキップ")
+                    continue
             
-            # 音声で問題を読み上げ
-            if operator == '+':
-                self.speak(f"{num1}たす{num2}は？")
-            elif operator == '-':
-                self.speak(f"{num1}ひく{num2}は？")
-            else:
-                self.speak(f"{num1}かける{num2}は？")
+            if "終了" in response:
+                detail_results.append(f"{i}問目: ユーザーが終了を選択")
+                break
             
-            # ユーザーの回答を待つ
-            user_answer = self.listen()
-            if user_answer is None:
+            try:
+                user_answer = int(response)
+                if user_answer == answer:
+                    speak("正解です！")
+                    score += 1
+                    detail_results.append(f"{i}問目: 正解")
+                else:
+                    speak(f"残念、正解は{answer}でした。")
+                    detail_results.append(f"{i}問目: 不正解（答: {answer}）")
+            except ValueError:
+                speak("数字で答えてください。")
+                detail_results.append(f"{i}問目: 無効回答")
                 continue
             
-            # 正解判定
-            try:
-                if int(normalize_answer(user_answer)) == int(answer):
-                    correct_count += 1
-                    print("正解です！")
-                    self.speak("正解です")
-                else:
-                    print(f"不正解です。正解は{answer}でした。")
-                    self.speak(f"不正解です。正解は{answer}でした。")
-            except Exception as e:
-                print(f"判定エラー: {e}")
-                print(f"不正解です。正解は{answer}でした。")
-                self.speak(f"不正解です。正解は{answer}でした。")
+            # 5問目と10問目で途中経過をアナウンス
+            if i == 5 or i == 10:
+                speak(f"{i}問目が終わりました。ここまで{score}問正解です。")
         
-        # 結果を表示（音声出力なし）
-        print("\n=== ゲーム結果 ===")
-        print(f"正解数: {correct_count}/{total_questions}")
-        print("=================\n")
+        end_time = time.time()
+        speak(f"ゲーム終了です。{i}問中{score}問正解でした。")
+        speak("お疲れ様でした。")
         
-        # 結果を音声で通知
-        self.speak(f"ゲーム終了です。{total_questions}問中{correct_count}問正解でした。")
-
-def normalize_answer(ans):
-    # 空白除去・全角半角統一
-    ans = ans.replace(" ", "").replace("　", "")
-    ans = unicodedata.normalize('NFKC', ans)
-    # 数字以外の文字を除去（必要なら）
-    return ans
+        # Googleスプレッドシート（Sheet2）に記録
+        save_calc_game_result(start_time, end_time, score, i, detail_results)
 
 if __name__ == "__main__":
     game = VoiceCalculationGame()

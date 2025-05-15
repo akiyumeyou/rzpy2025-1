@@ -170,3 +170,50 @@ def save_conversation_record(history):
     # 必要に応じて実装
     print("save_conversation_recordが呼ばれました（ダミー）")
     return True
+
+def save_calc_game_result(start_time, end_time, score, total_questions, detail_results):
+    """
+    Sheet2に、脳トレゲームの実施日時・所要時間・スコア・詳細結果を保存
+    """
+    try:
+        scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+        credentials = ServiceAccountCredentials.from_json_keyfile_name(SERVICE_ACCOUNT_FILE, scope)
+        client = gspread.authorize(credentials)
+        
+        spreadsheet = client.open_by_key(GOOGLE_SHEET_ID)
+        worksheet_list = spreadsheet.worksheets()
+        sheet_names = [ws.title.lower() for ws in worksheet_list]
+        target_sheet_name = "sheet2"
+        
+        # シートの取得または作成
+        sheet = None
+        for ws in worksheet_list:
+            if ws.title.lower() == target_sheet_name:
+                sheet = ws
+                break
+        if sheet is None:
+            sheet = spreadsheet.add_worksheet(title=target_sheet_name, rows="1000", cols="20")
+            # ヘッダー行を追加
+            sheet.append_row(["実施日時", "所要時間", "スコア", "詳細"])
+        
+        # 所要時間計算
+        duration = end_time - start_time
+        minutes = int(duration // 60)
+        seconds = int(duration % 60)
+        play_time = f"{minutes}分{seconds}秒"
+        
+        # 実施日時
+        exec_time = datetime.fromtimestamp(start_time).strftime("%Y-%m-%d %H:%M:%S")
+        
+        # 詳細（リストを1つの文字列にまとめる）
+        detail_str = "; ".join(detail_results)
+        
+        # データを保存
+        sheet.append_row([exec_time, play_time, f"{score}/{total_questions}", detail_str])
+        print(f"{sheet.title}に脳トレゲーム結果を保存しました")
+        return True
+    except Exception as e:
+        import traceback
+        print(f"Google Sheets保存エラー: {e}")
+        traceback.print_exc()
+        return False

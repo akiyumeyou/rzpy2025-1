@@ -32,6 +32,7 @@ from speech_input import listen, get_is_user_speaking
 import openai
 from file_operations import save_conversation_record, save_conversation_summary
 import asyncio
+import aizuchi  # aizuchi.py をインポート
 
 # .envファイル読み込み
 load_dotenv()
@@ -49,20 +50,7 @@ llm = ChatOpenAI(
 )
 
 prompt = ChatPromptTemplate.from_messages([
-    ("system", """あなたは高齢者と会話するアシスタントです。
-以下のルールを厳密に守ってください：
-
-1. ユーザーの発言が短い場合（3文字以下）は、相槌のみを返す。
-2. ユーザーの発言が不明確な場合は、具体的な質問をせず、相槌のみを返す。
-3. ユーザーが明示的に話題を変えるまで、現在の話題を維持する。
-4. 勝手に話題を展開しない。
-5. 相槌は「はい」「ええ」「そうですね」のみを使用し、1回だけ返す。
-6. ユーザーが「話したくない」と示した場合は、話題を変えずに相槌のみを返す。
-7. ユーザーの発言が文章として不完全な場合は、相槌のみを返す。
-8. 会話の主導権は常にユーザーに委ねる。
-
-現在の会話の文脈：
-{chat_history}"""),
+    ("system", "あなたは高齢者と会話する優しい人です。やさしい日本語で短く返してください。"),
     MessagesPlaceholder(variable_name="chat_history"),
     ("human", "{input}")
 ])
@@ -115,58 +103,6 @@ last_activity_time = time.time()
 def get_is_user_speaking():
     return is_user_speaking
 
-def listen():
-    """音声を認識して返す"""
-    global is_user_speaking
-    is_user_speaking = True
-    
-    try:
-        sample_rate = 16000
-        channels = 1
-        silence_threshold = 2.0  # 沈黙の閾値を2秒に延長
-        
-        with sd.RawInputStream(samplerate=sample_rate, blocksize=8000,
-                             device=None, dtype='int16',
-                             channels=channels, callback=audio_callback):
-            print("音声認識待機中...")
-            
-            # 音声認識の開始
-            start_time = time.time()
-            last_speech_time = time.time()
-            full_text = []
-            is_complete = False
-            
-            while not is_complete:
-                data = audio_queue.get()
-                if recognizer.AcceptWaveform(data):
-                    result = json.loads(recognizer.Result())
-                    text = result.get("text", "")
-                    if text:
-                        print(f"認識結果: {text}")
-                        full_text.append(text)
-                        last_speech_time = time.time()
-                
-                # 沈黙が続く場合に区切りと判断
-                if time.time() - last_speech_time > silence_threshold:
-                    # 最後の認識結果を確認
-                    final_result = json.loads(recognizer.FinalResult())
-                    final_text = final_result.get("text", "")
-                    if final_text:
-                        full_text.append(final_text)
-                    is_complete = True
-                
-                # 最大15秒まで待機
-                if time.time() - start_time > 15:
-                    break
-            
-            is_user_speaking = False
-            return " ".join(full_text) if full_text else None
-            
-    except Exception as e:
-        print(f"音声認識中にエラーが発生しました: {e}")
-        is_user_speaking = False
-        return None
-
 def create_summary():
     session_id = "default_session"
     history = get_session_history(session_id)
@@ -209,94 +145,80 @@ def create_family_message():
         print(f"家族向けメッセージの生成中にエラーが発生しました: {e}")
         return "メッセージの生成に失敗しました。"
 
-def suggest_topic():
-    """会話履歴から新しい話題を提案"""
+def load_topics():
     try:
-        session_id = "default_session"
-        history = get_session_history(session_id)
-        
-        if len(history.messages) < 2:
-            default_topics = [
-                "今日はどんな一日でしたか？",
-                "最近見た映画や読んだ本について教えてください",
-                "お気に入りの食べ物は何ですか？",
-                "今日のニュースで気になることはありますか？",
-                "天気はどうですか？"
-            ]
-            return random.choice(default_topics)
-        
-        # 会話履歴から話題を提案
-        topic_prompt = f"""
-        以下の会話履歴を参考に、自然な形で新しい話題を提案してください。
-        提案は「そういえば、」で始めてください。
-        日本語で、会話の流れを考慮した話題を提案してください。
-        
-        会話履歴:
-        {history.messages}
-        """
-        
-        response = llm.invoke(topic_prompt)
-        return response.content.strip()
+        with open(os.path.join(os.path.dirname(__file__), 'conversation_history', 'topics.json'), 'r', encoding='utf-8') as f:
+            return json.load(f)
     except Exception as e:
-        print(f"話題提案中にエラーが発生しました: {e}")
-        return "話題の提案に失敗しました。"
+        print(f"話題リストの読み込みに失敗: {e}")
+        return []
+
+TOPIC_STOCK = load_topics()
+
+
+def detect_intent_with_aizuchi(user_input: str):
+    # aizuchi.pyのキーワードを活用
+    detected = []
+    for emotion, keywords in aizuchi.EMOTION_KEYWORDS.items():
+        if any(keyword in user_input for keyword in keywords):
+            detected.append(emotion)
+    if detected:
+        return detected[0]  # 最初の意図を返す
+    # 質問形
+    if user_input.endswith("？") or user_input.endswith("?") or "とは" in user_input or "教えて" in user_input:
+        return "question"
+    # 話題要求
+    if any(word in user_input for word in ["話題", "何か話", "面白い話", "提案", "おすすめ", "困った", "沈黙"]):
+        return "request_topic"
+    # 短い発話
+    if len(user_input.strip()) <= 2:
+        return "short"
+    return "chat"
+
+
+def suggest_topic_from_stock():
+    if TOPIC_STOCK:
+        return random.choice(TOPIC_STOCK)
+    # デフォルト
+    return "最近気になることはありますか？"
+
 
 def generate_response(user_input, history):
-    """ユーザーの入力に応じて応答を生成"""
+    """ユーザーの入力に応じて応答を生成（意図判定・話題ストック・LLM活用）"""
     try:
-        # 会話履歴を取得
         messages = history.get_messages()
-        
-        # セッションIDを設定
         session_id = "default_session"
-        
-        # 短い発話の場合は相槌のみを返す
-        if len(user_input) <= 3:
-            return random.choice(["はい", "ええ", "そうですね"])
-        
-        # 文脈を考慮した応答生成
-        if len(messages) > 0:
-            last_message = messages[-1]
-            if last_message.get('role') == 'assistant':
-                # 前回の応答が相槌だった場合、次の応答は相槌を避ける
-                if any(word in last_message.get('content', '') for word in ["はい", "ええ", "そうですね"]):
-                    # より具体的な応答を生成
-                    response = conversation.invoke(
-                        {
-                            "input": user_input,
-                            "chat_history": messages[:-1]  # 最後の相槌を除いた履歴を使用
-                        },
-                        {"configurable": {"session_id": session_id}}
-                    )
-                else:
-                    # 通常の応答生成
-                    response = conversation.invoke(
-                        {
-                            "input": user_input,
-                            "chat_history": messages
-                        },
-                        {"configurable": {"session_id": session_id}}
-                    )
-            else:
-                # 通常の応答生成
-                response = conversation.invoke(
-                    {
-                        "input": user_input,
-                        "chat_history": messages
-                    },
-                    {"configurable": {"session_id": session_id}}
-                )
-        else:
-            # 初回の応答生成
-            response = conversation.invoke(
-                {
-                    "input": user_input,
-                    "chat_history": []
-                },
-                {"configurable": {"session_id": session_id}}
-            )
-        
-        return response.content if hasattr(response, 'content') else str(response)
+        intent = detect_intent_with_aizuchi(user_input)
+        last_message = messages[-1] if messages else None
+        last_is_aizuchi = last_message and last_message.get('role') == 'assistant' and \
+            any(word in last_message.get('content', '') for word in ["はい", "ええ", "そうですね"] + aizuchi.DEFAULT_RESPONSES)
+
+        # 1. 話題要求
+        if intent == "request_topic":
+            return suggest_topic_from_stock()
+
+        # 2. 質問
+        if intent == "question":
+            prompt = f"ユーザーからの質問に、やさしい日本語で50文字以内、2文以内で短く丁寧に答えてください。\n質問: {user_input}"
+            response = llm.invoke(prompt)
+            return response.content.strip()
+
+        # 3. 感情・興味
+        if intent in ["happy", "sad", "interest"]:
+            aizuchi_resp = aizuchi.select_local_aizuchi(user_input)
+            # 共感のみ、または共感＋一言
+            return f"{aizuchi_resp}"
+
+        # 4. 短い発話
+        if intent == "short":
+            if last_is_aizuchi:
+                return suggest_topic_from_stock()
+            return random.choice([r for r in ["はい", "ええ", "そうですね"] if r != (last_message.get('content') if last_message else None)])
+
+        # 5. 通常の雑談
+        prompt = f"高齢者と会話しています。やさしい日本語で、共感しながら50文字以内、2文以内で短く返してください。\nユーザー: {user_input}\n"
+        response = llm.invoke(prompt)
+        return response.content.strip()
     except Exception as e:
         print(f"応答生成エラー: {e}")
         return "すみません、もう一度お願いします。"
@@ -304,6 +226,13 @@ def generate_response(user_input, history):
 def save_conversation_background(history):
     thread = threading.Thread(target=save_conversation_record, args=(history,))
     thread.start()
+
+def postprocess_response(response: str) -> str:
+    # 先頭のAI:やアシスタント:などを除去
+    for prefix in ["AI:", "アシスタント:", "Assistant:", "assistant:", "ＡＩ："]:
+        if response.startswith(prefix):
+            response = response[len(prefix):].strip()
+    return response
 
 def start_voice_chat():
     """音声対話を開始"""
@@ -315,9 +244,9 @@ def start_voice_chat():
     
     # 初期トピックの提案
     initial_topics = [
-        "今日の天気はどうですか？",
-        "最近、楽しかったことはありますか？",
-        "お気に入りの食べ物は何ですか？"
+        "今日はどのようにお過ごしですか？",
+        "楽しかったことはありました？",
+        "何のお話が良いですか？"
     ]
     initial_topic = random.choice(initial_topics)
     speak(initial_topic)
@@ -343,6 +272,7 @@ def start_voice_chat():
         response = generate_response(user_input, history)
         
         if response:  # 応答がある場合のみ話す
+            response = postprocess_response(response)
             speak(response)
             history.add_message("assistant", response)
 
