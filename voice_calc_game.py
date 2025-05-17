@@ -2,56 +2,71 @@
 # -*- coding: utf-8 -*-
 
 import random
-import speech_recognition as sr
 import subprocess
 import time
 from conversation_manager import ConversationManager
 from speech_output import speak
 from datetime import datetime
 from file_operations import save_calc_game_result
+from speech_input import listen
 
+# 日本語数字→数値変換用辞書
+KANJI_NUMS = {
+    "ぜろ": 0, "れい": 0, "いち": 1, "に": 2, "さん": 3, "し": 4, "よん": 4, "ご": 5, "ろく": 6, "しち": 7, "なな": 7, "はち": 8, "きゅう": 9, "く": 9,
+    "じゅう": 10, "ひゃく": 100
+}
+
+def japanese_number_to_int(text):
+    """日本語の数字（1〜99程度、マイナス対応、フィラー・空白除去）を数値に変換"""
+    if not text:
+        raise ValueError("空のテキスト")
+    # フィラー語・不要語を除去
+    fillers = ["えー", "うーん", "あのー", "えっと", "ええと", "うー", "うん"]
+    for f in fillers:
+        text = text.replace(f, "")
+    # 空白・全角スペース除去
+    text = text.replace(" ", "").replace("　", "")
+    text = text.replace("一", "いち").replace("二", "に").replace("三", "さん").replace("四", "よん").replace("五", "ご").replace("六", "ろく").replace("七", "なな").replace("八", "はち").replace("九", "きゅう").replace("十", "じゅう").replace("百", "ひゃく")
+    is_negative = False
+    # マイナス表現の検出
+    if text.startswith("まいなす") or text.startswith("マイナス") or text.startswith("-"):
+        is_negative = True
+        text = text.replace("まいなす", "", 1).replace("マイナス", "", 1).replace("-", "", 1)
+    if text.isdigit():
+        value = int(text)
+    else:
+        num = 0
+        if "ひゃく" in text:
+            idx = text.find("ひゃく")
+            if idx == 0:
+                num += 100
+            else:
+                num += KANJI_NUMS.get(text[:idx], 1) * 100
+            text = text[idx+3:]
+        if "じゅう" in text:
+            idx = text.find("じゅう")
+            if idx == 0:
+                num += 10
+            else:
+                num += KANJI_NUMS.get(text[:idx], 1) * 10
+            text = text[idx+3:]
+        if text:
+            num += KANJI_NUMS.get(text, 0)
+        value = num
+    return -value if is_negative else value
 
 class VoiceCalculationGame:
     """音声による計算ゲーム"""
     
     def __init__(self):
         """初期化"""
-        self.recognizer = sr.Recognizer()
-        self.microphone = sr.Microphone()
         self.conversation_manager = ConversationManager()
         
-        # 環境ノイズの調整
-        with self.microphone as source:
-            self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
-    
     def speak(self, text):
-        """テキストを音声で読み上げる"""
         print(f"コンピュータ: {text}")
-        # 会話を記録
         self.conversation_manager.add_to_conversation("system", text)
-        # 「は？」を「wa?」に置換（出題文用）
-        speaking_text = text.replace("は？", "わ？").replace("は", "わ").replace("初めましょう", "はじめましょう")
-        subprocess.run(["say", "-v", "Kyoko", speaking_text])
-    
-    def listen(self):
-        """音声を認識して返す（短い発話を素早くキャッチ）"""
-        with self.microphone as source:
-            print("聞いています...")
-            try:
-                audio = self.recognizer.listen(source, timeout=5.0, phrase_time_limit=2.0)
-                text = self.recognizer.recognize_google(audio, language='ja-JP')
-                print(f"認識された発話: {text}")
-                self.conversation_manager.add_to_conversation("user", text)
-                return text.lower()
-            except sr.WaitTimeoutError:
-                speak("声が聞こえませんでした。もう一度お願いします。")
-                return None
-            except sr.UnknownValueError:
-                speak("すみません、聞き取れませんでした。もう一度お願いします。")
-                return None
-            except sr.RequestError:
-                speak("音声認識サービスに接続できませんでした。ネットワーク接続を確認してください。")
-                return None
+        speaking_text = re.sub(r'は[？?]', 'わ？', text)
+        subprocess.run(['say', '-v', 'Kyoko', speaking_text])
     
     def generate_question(self, level=1):
         """計算問題を生成（level=1:簡単, level=2:難しい）"""
@@ -77,15 +92,15 @@ class VoiceCalculationGame:
         
         if operator == "+":
             answer = a + b
-            question = f"{a}たす{b}わ？"
+            question = f"{a}たす{b}は？"
         elif operator == "-":
             answer = a - b
-            question = f"{a}ひく{b}わ？"
+            question = f"{a}ひく{b}は？"
         elif operator == "*":
             answer = a * b
-            question = f"{a}かける{b}わ？"
+            question = f"{a}かける{b}は？"
         else:  # "/"
-            question = f"{a}わる{b}わ？"
+            question = f"{a}わる{b}は？"
         return question, answer
     
     def run_game(self):
@@ -103,13 +118,14 @@ class VoiceCalculationGame:
             level = 1 if i <= 5 else 2
             question, answer = self.generate_question(level=level)
             speak(question)
+            print(f"【出題】{question}")  # 問題と正解を表示
             
-            response = self.listen()
+            response = listen()
             if response is None:
                 # もう一度同じ問題を出します。
                 speak("もう一度同じ問題を出します。")
                 speak(question)
-                response = self.listen()
+                response = listen()
                 if response is None:
                     detail_results.append(f"{i}問目: スキップ")
                     continue
@@ -119,7 +135,9 @@ class VoiceCalculationGame:
                 break
             
             try:
-                user_answer = int(response)
+                # 日本語数字→数値変換
+                user_answer = japanese_number_to_int(response)
+                print(f"【ユーザー発話】{response} → 【変換後】{user_answer}")  # 認識結果と変換後数値を表示
                 if user_answer == answer:
                     speak("正解です！")
                     score += 1
@@ -127,7 +145,8 @@ class VoiceCalculationGame:
                 else:
                     speak(f"残念、正解は{answer}でした。")
                     detail_results.append(f"{i}問目: 不正解（答: {answer}）")
-            except ValueError:
+            except Exception:
+                print(f"【ユーザー発話】{response} → 【変換失敗】")
                 speak("数字で答えてください。")
                 detail_results.append(f"{i}問目: 無効回答")
                 continue

@@ -26,7 +26,6 @@ import sounddevice as sd
 import wave
 import tempfile
 import queue
-from vosk import Model, KaldiRecognizer
 from speech_output import speak
 from speech_input import listen, get_is_user_speaking
 import openai
@@ -84,11 +83,6 @@ conversation = RunnableWithMessageHistory(
 )
 
 # 音声認識の設定
-audio_queue = queue.Queue()
-model_path = os.path.join(os.path.dirname(__file__), "model")
-vosk_model = Model(model_path)
-recognizer = KaldiRecognizer(vosk_model, 16000)
-recognizer.SetWords(True)
 
 def audio_callback(indata, frames, time, status):
     """音声入力のコールバック関数"""
