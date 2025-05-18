@@ -8,6 +8,32 @@ import time
 import queue
 import api_chat  # 既存のAPI会話機能をインポート
 import subprocess
+import sys
+import webbrowser
+import voice_calc_game
+import pygame
+import platform
+
+# モード選択肢
+MODES = [
+    "おしゃべり",
+    "脳トレゲーム",
+    "ポッツに接続",
+    "終了します"
+]
+
+# VL Gothicフォントパス（ラズパイ標準）
+# FONT_PATH = "/usr/share/fonts/truetype/vlgothic/VL-Gothic-Regular.ttf"
+
+# フォントパスを自動判定
+VL_GOTHIC_LOCAL = "/usr/share/fonts/truetype/vlgothic/VL-Gothic-Regular.ttf"
+VL_GOTHIC_SYS = "/usr/share/fonts/truetype/vlgothic/VL-Gothic-Regular.ttf"
+MAC_FONT = "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc"
+
+if platform.system() == "Darwin":
+    FONT_PATH = MAC_FONT
+else:
+    FONT_PATH = VL_GOTHIC_LOCAL
 
 class SimpleChatUI:
     def __init__(self, root, standalone=True):
@@ -15,7 +41,8 @@ class SimpleChatUI:
         self.standalone = standalone
         self.root.title("音声会話アシスタント")
         self.root.geometry("800x600")  # 大きな画面サイズ
-        self.root.configure(bg="#F0F0F0")  # 背景色
+        #self.root.configure(bg="#F0F0F0")  # 背景色
+        self.root.configure(bg="#FFFFFF")
         
         # メッセージキュー
         self.message_queue = queue.Queue()
@@ -345,12 +372,476 @@ class SimpleChatUI:
         self.stop_event.set()
         self.root.destroy()
 
+class SimpleDisplayUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("モード選択")
+        self.root.geometry("1000x700")
+        self.root.configure(bg="#FFFFFF")
+        self.current_frame = None
+        self.mode = None
+        self.question_no = 0
+        self.last_result = ""
+        self.create_mode_select()
+        print("モード選択画面を表示")
+        
+    def clear_frame(self):
+        if self.current_frame:
+            self.current_frame.destroy()
+            self.current_frame = None
+
+    def create_mode_select(self):
+        self.clear_frame()
+        self.mode = None
+        frame = tk.Frame(self.root, bg="#F8F8F8")
+        frame.pack(expand=True, fill=tk.BOTH)
+        self.current_frame = frame
+        label = tk.Label(
+            frame,
+            text="モードを選んでください",
+            font=("Helvetica", 48, "bold"),
+            bg="#F8F8F8",
+            fg="#222"
+        )
+        label.pack(pady=60)
+        for mode in MODES:
+            mode_label = tk.Label(
+                frame,
+                text=mode,
+                font=("Helvetica", 40),
+                bg="#F8F8F8",
+                fg="#444"
+            )
+            mode_label.pack(pady=20)
+        # 音声認識で選択を開始
+        threading.Thread(target=self.listen_mode_select, daemon=True).start()
+
+    def listen_mode_select(self):
+        import speech_input
+        import speech_output
+        speech_output.speak("おしゃべり、脳トレゲーム、ポッツに接続、または終了しますか？")
+        while True:
+            user_input = speech_input.listen()
+            if not user_input:
+                continue
+            normalized = user_input.replace(" ", "").replace("　", "")
+            if any(word in normalized for word in ["終了", "さようなら", "終わります", "終了します"]):
+                self.show_exit()
+                return
+            elif "おしゃべり" in normalized:
+                self.show_chat()
+                return
+            elif "脳トレ" in normalized or "ゲーム" in normalized:
+                self.show_calc_game()
+                return
+            elif "ポッツ" in normalized or "接続" in normalized:
+                self.show_potz()
+                return
+            else:
+                speech_output.speak("もう一度お願いします。おしゃべり、脳トレゲーム、ポッツに接続、または終了しますか？")
+
+    def show_chat(self):
+        self.clear_frame()
+        self.mode = "chat"
+        frame = tk.Frame(self.root, bg="#F8F8F8")
+        frame.pack(expand=True, fill=tk.BOTH)
+        self.current_frame = frame
+        status_label = tk.Label(
+            frame,
+            text="声を聞いています",
+            font=("Helvetica", 44, "bold"),
+            bg="#F8F8F8",
+            fg="#1976D2"
+        )
+        status_label.pack(pady=60)
+        self.chat_response_label = tk.Label(
+            frame,
+            text="",
+            font=("Helvetica", 40),
+            bg="#F8F8F8",
+            fg="#333"
+        )
+        self.chat_response_label.pack(pady=40)
+        threading.Thread(target=self.run_chat, daemon=True).start()
+
+    def run_chat(self):
+        import speech_input
+        import speech_output
+        history = api_chat.ConversationHistory()
+        while True:
+            self.set_chat_status("声を聞いています")
+            user_input = speech_input.listen()
+            if not user_input:
+                continue
+            if "終了" in user_input:
+                speech_output.speak("会話を終了します。")
+                self.create_mode_select()
+                return
+            history.add_message("user", user_input)
+            response = api_chat.generate_response(user_input, history)
+            if response:
+                response = api_chat.postprocess_response(response)
+                self.set_chat_response(response)
+                speech_output.speak(response)
+                history.add_message("assistant", response)
+            time.sleep(0.5)
+
+    def set_chat_status(self, text):
+        if hasattr(self, 'chat_response_label'):
+            self.chat_response_label.master.children['!label'].config(text=text)
+
+    def set_chat_response(self, text):
+        if hasattr(self, 'chat_response_label'):
+            self.chat_response_label.config(text=text)
+
+    def show_calc_game(self):
+        self.clear_frame()
+        self.mode = "calc"
+        frame = tk.Frame(self.root, bg="#F8F8F8")
+        frame.pack(expand=True, fill=tk.BOTH)
+        self.current_frame = frame
+        self.calc_question_label = tk.Label(
+            frame,
+            text="",
+            font=("Helvetica", 44, "bold"),
+            bg="#F8F8F8",
+            fg="#388E3C"
+        )
+        self.calc_question_label.pack(pady=60)
+        self.calc_result_label = tk.Label(
+            frame,
+            text="",
+            font=("Helvetica", 40),
+            bg="#F8F8F8",
+            fg="#333"
+        )
+        self.calc_result_label.pack(pady=40)
+        threading.Thread(target=self.run_calc_game, daemon=True).start()
+
+    def run_calc_game(self):
+        import speech_input
+        import speech_output
+        game = voice_calc_game.VoiceCalculationGame()
+        total_questions = 10
+        score = 0
+        for i in range(1, total_questions + 1):
+            level = 1 if i <= 5 else 2
+            question, answer = game.generate_question(level=level)
+            self.set_calc_question(f"第{i}問目: {question}")
+            self.set_calc_result("")
+            speech_output.speak(question)
+            response = speech_input.listen()
+            if not response:
+                speech_output.speak("もう一度同じ問題を出します。")
+                speech_output.speak(question)
+                response = speech_input.listen()
+                if not response:
+                    self.set_calc_result("スキップ")
+                    continue
+            if "終了" in response:
+                self.set_calc_result("終了します")
+                speech_output.speak("ゲームを終了します。")
+                self.create_mode_select()
+                return
+            try:
+                user_answer = voice_calc_game.japanese_number_to_int(response)
+                if user_answer == answer:
+                    self.set_calc_result("正解！")
+                    speech_output.speak("正解です！")
+                    score += 1
+                else:
+                    self.set_calc_result(f"不正解（正解: {answer}）")
+                    speech_output.speak(f"残念、正解は{answer}でした。")
+            except Exception:
+                self.set_calc_result("無効な回答")
+                speech_output.speak("数字で答えてください。")
+            time.sleep(1)
+        self.set_calc_question("")
+        self.set_calc_result(f"ゲーム終了！{score}問正解でした。")
+        speech_output.speak(f"ゲーム終了です。{score}問正解でした。お疲れ様でした。")
+        time.sleep(2)
+        self.create_mode_select()
+
+    def set_calc_question(self, text):
+        if hasattr(self, 'calc_question_label'):
+            self.calc_question_label.config(text=text)
+
+    def set_calc_result(self, text):
+        if hasattr(self, 'calc_result_label'):
+            self.calc_result_label.config(text=text)
+
+    def show_potz(self):
+        self.clear_frame()
+        frame = tk.Frame(self.root, bg="#F8F8F8")
+        frame.pack(expand=True, fill=tk.BOTH)
+        self.current_frame = frame
+        label = tk.Label(
+            frame,
+            text="ポッツに接続中...",
+            font=("Helvetica", 48, "bold"),
+            bg="#F8F8F8",
+            fg="#1976D2"
+        )
+        label.pack(pady=120)
+        webbrowser.open("https://ftc.potz.jp/dashboard")
+        self.root.after(3000, self.create_mode_select)
+
+    def show_exit(self):
+        self.clear_frame()
+        frame = tk.Frame(self.root, bg="#F8F8F8")
+        frame.pack(expand=True, fill=tk.BOTH)
+        self.current_frame = frame
+        label = tk.Label(
+            frame,
+            text="終了します",
+            font=("Helvetica", 48, "bold"),
+            bg="#F8F8F8",
+            fg="#B71C1C"
+        )
+        label.pack(pady=120)
+        self.root.after(2000, self.root.quit)
+
+class PygameUI:
+    def __init__(self):
+        pygame.init()
+        self.screen = pygame.display.set_mode((1000, 700))
+        pygame.display.set_caption("モード選択")
+        self.font_title = pygame.font.Font(FONT_PATH, 60)
+        self.font_item = pygame.font.Font(FONT_PATH, 48)
+        self.font_status = pygame.font.Font(FONT_PATH, 44)
+        self.font_result = pygame.font.Font(FONT_PATH, 40)
+        self.state = "menu"  # menu, chat, calc, potz, exit
+        self.chat_response = ""
+        self.calc_question = ""
+        self.calc_result = ""
+        self.calc_score = 0
+        self.calc_no = 1
+        self.running = True
+        self.listen_thread = None
+        self.bg_color = (255, 255, 255)
+        self.fg_color = (30, 30, 30)
+        self.start_menu()
+
+    def start_menu(self):
+        self.state = "menu"
+        self.chat_response = ""
+        self.calc_question = ""
+        self.calc_result = ""
+        self.calc_score = 0
+        self.calc_no = 1
+        if self.listen_thread and self.listen_thread.is_alive():
+            self.listen_thread = None
+        self.listen_thread = threading.Thread(target=self.listen_menu, daemon=True)
+        self.listen_thread.start()
+
+    def listen_menu(self):
+        import speech_input
+        import speech_output
+        speech_output.speak("おしゃべり、脳トレゲーム、ポッツに接続、または終了しますか？")
+        while self.state == "menu":
+            user_input = speech_input.listen()
+            if not user_input:
+                continue
+            normalized = user_input.replace(" ", "").replace("　", "")
+            if any(word in normalized for word in ["終了", "さようなら", "終わります", "終了します"]):
+                self.state = "exit"
+                return
+            elif "おしゃべり" in normalized:
+                self.state = "chat"
+                self.start_chat()
+                return
+            elif "脳トレ" in normalized or "ゲーム" in normalized:
+                self.state = "calc"
+                self.start_calc()
+                return
+            elif "ポッツ" in normalized or "接続" in normalized:
+                self.state = "potz"
+                self.start_potz()
+                return
+            else:
+                speech_output.speak("もう一度お願いします。おしゃべり、脳トレゲーム、ポッツに接続、または終了しますか？")
+
+    def start_chat(self):
+        self.chat_response = ""
+        if self.listen_thread and self.listen_thread.is_alive():
+            self.listen_thread = None
+        self.listen_thread = threading.Thread(target=self.run_chat, daemon=True)
+        self.listen_thread.start()
+
+    def run_chat(self):
+        import speech_input
+        import speech_output
+        history = api_chat.ConversationHistory()
+        while self.state == "chat":
+            self.chat_response = ""
+            user_input = speech_input.listen()
+            if not user_input:
+                continue
+            if "終了" in user_input:
+                speech_output.speak("会話を終了します。")
+                self.start_menu()
+                return
+            history.add_message("user", user_input)
+            response = api_chat.generate_response(user_input, history)
+            if response:
+                response = api_chat.postprocess_response(response)
+                self.chat_response = response
+                speech_output.speak(response)
+                history.add_message("assistant", response)
+            time.sleep(0.5)
+
+    def start_calc(self):
+        self.calc_score = 0
+        self.calc_no = 1
+        self.calc_question = ""
+        self.calc_result = ""
+        if self.listen_thread and self.listen_thread.is_alive():
+            self.listen_thread = None
+        self.listen_thread = threading.Thread(target=self.run_calc, daemon=True)
+        self.listen_thread.start()
+
+    def run_calc(self):
+        import speech_input
+        import speech_output
+        game = voice_calc_game.VoiceCalculationGame()
+        total_questions = 10
+        for i in range(1, total_questions + 1):
+            if self.state != "calc":
+                return
+            level = 1 if i <= 5 else 2
+            question, answer = game.generate_question(level=level)
+            self.calc_question = f"第{i}問目: {question}"
+            self.calc_result = ""
+            speech_output.speak(question)
+            response = speech_input.listen()
+            if not response:
+                speech_output.speak("もう一度同じ問題を出します。")
+                speech_output.speak(question)
+                response = speech_input.listen()
+                if not response:
+                    self.calc_result = "スキップ"
+                    continue
+            if "終了" in response:
+                self.calc_result = "終了します"
+                speech_output.speak("ゲームを終了します。")
+                self.start_menu()
+                return
+            try:
+                user_answer = voice_calc_game.japanese_number_to_int(response)
+                if user_answer == answer:
+                    self.calc_result = "正解！"
+                    speech_output.speak("正解です！")
+                    self.calc_score += 1
+                else:
+                    self.calc_result = f"不正解（正解: {answer}）"
+                    speech_output.speak(f"残念、正解は{answer}でした。")
+            except Exception:
+                self.calc_result = "無効な回答"
+                speech_output.speak("数字で答えてください。")
+            time.sleep(1)
+        self.calc_question = ""
+        self.calc_result = f"ゲーム終了！{self.calc_score}問正解でした。"
+        speech_output.speak(f"ゲーム終了です。{self.calc_score}問正解でした。お疲れ様でした。")
+        time.sleep(2)
+        self.start_menu()
+
+    def start_potz(self):
+        self.state = "potz"
+        webbrowser.open("https://ftc.potz.jp/dashboard")
+        threading.Thread(target=self.potz_wait_and_return, daemon=True).start()
+
+    def potz_wait_and_return(self):
+        time.sleep(3)
+        self.start_menu()
+
+    def mainloop(self):
+        clock = pygame.time.Clock()
+        while self.running:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.running = False
+            self.screen.fill(self.bg_color)
+            if self.state == "menu":
+                self.draw_menu()
+            elif self.state == "chat":
+                self.draw_chat()
+            elif self.state == "calc":
+                self.draw_calc()
+            elif self.state == "potz":
+                self.draw_potz()
+            elif self.state == "exit":
+                self.draw_exit()
+                pygame.display.update()
+                time.sleep(2)
+                self.running = False
+                break
+            pygame.display.update()
+            clock.tick(30)
+        pygame.quit()
+        sys.exit()
+
+    def draw_menu(self):
+        title = self.font_title.render("モードを選んでください", True, self.fg_color)
+        self.screen.blit(title, (120, 80))
+        for i, mode in enumerate(MODES):
+            text = self.font_item.render(mode, True, (50, 50, 50))
+            self.screen.blit(text, (200, 200 + i * 100))
+
+    def draw_chat(self):
+        status = self.font_status.render("声を聞いています", True, (25, 90, 180))
+        self.screen.blit(status, (180, 120))
+        if self.chat_response:
+            self.draw_text(
+                self.screen,
+                self.chat_response,
+                self.font_result,
+                (30, 30, 30),
+                120, 300,
+                max_width=760
+            )
+
+    def draw_calc(self):
+        if self.calc_question:
+            q = self.font_status.render(self.calc_question, True, (30, 120, 60))
+            self.screen.blit(q, (100, 120))
+        if self.calc_result:
+            self.draw_text(
+                self.screen,
+                self.calc_result,
+                self.font_result,
+                (30, 30, 30),
+                120, 300,
+                max_width=760
+            )
+
+    def draw_potz(self):
+        label = self.font_title.render("ポッツに接続中...", True, (25, 90, 180))
+        self.screen.blit(label, (180, 220))
+
+    def draw_exit(self):
+        label = self.font_title.render("終了します", True, (180, 30, 30))
+        self.screen.blit(label, (320, 220))
+
+    def draw_text(self, surface, text, font, color, x, y, max_width):
+        """指定幅で自動折り返ししてテキストを描画"""
+        lines = []
+        line = ""
+        for char in text:
+            test_line = line + char
+            if font.size(test_line)[0] > max_width:
+                lines.append(line)
+                line = char
+            else:
+                line = test_line
+        if line:
+            lines.append(line)
+        for i, l in enumerate(lines):
+            rendered = font.render(l, True, color)
+            surface.blit(rendered, (x, y + i * font.get_linesize()))
+
 def main():
-    """スタンドアロンモードで実行する場合のエントリポイント"""
-    root = tk.Tk()
-    app = SimpleChatUI(root, standalone=True)
-    app.start_conversation()  # 自動的に会話を開始
-    root.mainloop()
+    ui = PygameUI()
+    ui.mainloop()
 
 if __name__ == "__main__":
     main() 

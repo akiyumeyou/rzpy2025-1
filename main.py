@@ -62,7 +62,7 @@ def main():
                 print("1. おしゃべり")
                 print("2. 脳トレゲーム")
                 print("3. ポッツに接続")
-                print("4. 終了します")
+                print("4. 終了")
                 
     except KeyboardInterrupt:
         print("\nプログラムを終了します")

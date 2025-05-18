@@ -4,6 +4,7 @@
 import random
 import subprocess
 import time
+import re
 from conversation_manager import ConversationManager
 from speech_output import speak
 from datetime import datetime
@@ -65,8 +66,17 @@ class VoiceCalculationGame:
     def speak(self, text):
         print(f"コンピュータ: {text}")
         self.conversation_manager.add_to_conversation("system", text)
-        speaking_text = re.sub(r'は[？?]', 'わ？', text)
-        subprocess.run(['say', '-v', 'Kyoko', speaking_text])
+        m = re.search(r'(.*)は([？?])', text)
+        if m:
+            before = m.group(1)
+            after = m.group(2)
+            # 前半を日本語で
+            if before:
+                subprocess.run(['say', '-v', 'Kyoko', before])
+            # 「wa?」を英語で
+            subprocess.run(['say', '-v', 'Samantha', 'wa' + after])
+        else:
+            subprocess.run(['say', '-v', 'Kyoko', text])
     
     def generate_question(self, level=1):
         """計算問題を生成（level=1:簡単, level=2:難しい）"""
@@ -92,15 +102,15 @@ class VoiceCalculationGame:
         
         if operator == "+":
             answer = a + b
-            question = f"{a}たす{b}は？"
+            question = f"問題です。{a}たす{b}は？"
         elif operator == "-":
             answer = a - b
-            question = f"{a}ひく{b}は？"
+            question = f"問題です。{a}ひく{b}は？"
         elif operator == "*":
             answer = a * b
-            question = f"{a}かける{b}は？"
+            question = f"問題です。{a}かける{b}は？"
         else:  # "/"
-            question = f"{a}わる{b}は？"
+            question = f"問題です。{a}わる{b}は？"
         return question, answer
     
     def run_game(self):
@@ -157,7 +167,7 @@ class VoiceCalculationGame:
         
         end_time = time.time()
         speak(f"ゲーム終了です。{i}問中{score}問正解でした。")
-        speak("お疲れ様でした。")
+        speak("聞き取りが悪く不正解だった場合は、ごめんなさい。くじけずトレーニングしましょう。お疲れ様でした。")
         
         # Googleスプレッドシート（Sheet2）に記録
         save_calc_game_result(start_time, end_time, score, i, detail_results)
